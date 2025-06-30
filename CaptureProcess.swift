@@ -429,19 +429,18 @@ DefaultAudioEngine(streamId: streamId) {
         }
     }
     
-    private func startAudioCapture(device: AVCaptureDevice, streamId: String) async -> Bool {
-        return await withCheckedContinuation { continuation in
-            captureQueue.async { [weak self] in
-                guard let self = self else {
-                    continuation.resume(returning: false)
-                    return
-                }
-                
-                let result = self.startAudioCaptureSync(device: device, streamId: streamId)
-                continuation.resume(returning: result)
+   private func startAudioCapture(device: AVCaptureDevice, streamId: String) async -> Bool {
+    return await withCheckedContinuation { continuation in
+        captureQueue.async { [weak self] in // Warning occurs here
+            guard let self = self else {
+                continuation.resume(returning: false)
+                return
             }
+            let result = self.startAudioCaptureSync(device: device, streamId: streamId)
+            continuation.resume(returning: result)
         }
     }
+}
     
     private func startAudioCaptureSync(device: AVCaptureDevice, streamId: String) -> Bool {
         let engine = AVAudioEngine()
@@ -711,10 +710,10 @@ DefaultAudioEngine(streamId: streamId) {
                 audioFiles[audioPath] = audioFile
             }
             
-            for (path, writer) in videoWriters {
-                writer.startWriting()
-                writer.startSession(atSourceTime: CMTime.zero)
-            }
+           for (_, writer) in videoWriters {
+    writer.startWriting()
+    writer.startSession(atSourceTime: CMTime.zero)
+}
             
         } catch { }
     }
@@ -722,12 +721,12 @@ DefaultAudioEngine(streamId: streamId) {
     // MARK: - Stream Control
     
     private func stopAllStreams() {
-        for (streamId, engine) in audioEngines {
+        for (_, engine) in audioEngines {
             engine.stop()
             engine.inputNode.removeTap(onBus: 0)
         }
         
-        for (streamId, stream) in screenStreams {
+        for (_, stream) in screenStreams {
             Task {
                 do {
                     try await stream.stopCapture()
