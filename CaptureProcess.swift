@@ -700,20 +700,15 @@ class AudioVideoCaptureProcess: NSObject {
     
     private func startAudioCapture(device: AVCaptureDevice, streamId: String) async -> Bool {
         logger.log("Starting audio capture for device: \(device.localizedName)")
-        
-        return await withCheckedContinuation { continuation in
-            captureQueue.async { [weak self] in
-                guard let self = self else {
-                    continuation.resume(returning: false)
-                    return
-                }
-                
-                let result = self.startAudioCaptureSync(device: device, streamId: streamId)
-                continuation.resume(returning: result)
-            }
+    return await withCheckedContinuation { continuation in
+        captureQueue.async {
+            let captureProcess = AudioVideoCaptureProcess.shared
+            let result = captureProcess.startAudioCaptureSync(device: device, streamId: streamId)
+            continuation.resume(returning: result)
         }
     }
-    
+}
+
     private func startAudioCaptureSync(device: AVCaptureDevice, streamId: String) -> Bool {
         let engine = AVAudioEngine()
         
@@ -736,10 +731,7 @@ class AudioVideoCaptureProcess: NSObject {
             let deviceUID = device.uniqueID as CFString
             var uidString = deviceUID as NSString
             
-            // Create a copy of deviceID for the closure
-            var localDeviceID = deviceID
-            
-            withUnsafeMutablePointer(to: &localDeviceID) { deviceIDPtr in
+            withUnsafeMutablePointer(to: &deviceID) { deviceIDPtr in
                 withUnsafePointer(to: &uidString) { uidPtr in
                     var translation = AudioValueTranslation(
                         mInputData: UnsafeMutableRawPointer(mutating: uidPtr),
@@ -758,8 +750,8 @@ class AudioVideoCaptureProcess: NSObject {
                         &translation
                     )
                     
-                    if status == noErr {
-                        deviceID = localDeviceID
+                    if status != noErr {
+                        logger.log("Failed to get Core Audio device ID, status: \(status)")
                     }
                 }
             }
@@ -785,6 +777,9 @@ class AudioVideoCaptureProcess: NSObject {
             } else {
                 logger.log("Could not get Core Audio device ID for \(device.uniqueID), using default")
             }
+      
+
+
             
             let inputNode = engine.inputNode
             let format = inputNode.outputFormat(forBus: 0)
@@ -837,6 +832,7 @@ class AudioVideoCaptureProcess: NSObject {
             activeStreams[streamId] = engine
             
             logger.log("Audio engine started successfully for device: \(device.localizedName)")
+
             return true
         } catch {
             logger.logError("Failed to start audio capture for device: \(device.localizedName)", error: error)
