@@ -132,7 +132,8 @@ struct CaptureResponse: Codable {
 
 // MARK: - Main Capture Process
 
-class AudioVideoCaptureProcess: NSObject {
+@MainActor
+final class AudioVideoCaptureProcess: NSObject {
     static let shared = AudioVideoCaptureProcess()
     private let logger = FileLogger.shared
     
