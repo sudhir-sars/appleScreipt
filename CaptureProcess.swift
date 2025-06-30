@@ -391,17 +391,7 @@ class AudioVideoCaptureProcess: NSObject {
     private func captureDefaultDevices() async {
         logger.log("Capturing default devices...")
         var audioStreams: [StreamInfo] = []
-        var videoStreams: [VideoStreamInfo] = []
-        
-        // Configure audio session
-        do {
-            let audioSession = AVAudioSession.sharedInstance()
-            try audioSession.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .mixWithOthers])
-            try audioSession.setActive(true)
-            logger.log("Audio session configured successfully")
-        } catch {
-            logger.logError("Failed to configure audio session", error: error)
-        }
+        let videoStreams: [VideoStreamInfo] = []
         
         // Capture default input device
         if let defaultInput = getDefaultInputDevice() {
@@ -439,18 +429,14 @@ class AudioVideoCaptureProcess: NSObject {
         var audioStreams: [StreamInfo] = []
         var videoStreams: [VideoStreamInfo] = []
         
-        // Configure audio session
-        do {
-            let audioSession = AVAudioSession.sharedInstance()
-            try audioSession.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .mixWithOthers])
-            try audioSession.setActive(true)
-            logger.log("Audio session configured successfully")
-        } catch {
-            logger.logError("Failed to configure audio session", error: error)
+        // Capture all input devices
+        let deviceTypes: [AVCaptureDevice.DeviceType]
+        if #available(macOS 14.0, *) {
+            deviceTypes = [.microphone, .external]
+        } else {
+            deviceTypes = [.builtInMicrophone, .external]
         }
         
-        // Capture all input devices
-        let deviceTypes: [AVCaptureDevice.DeviceType] = [.builtInMicrophone, .external]
         let devices = AVCaptureDevice.DiscoverySession(
             deviceTypes: deviceTypes,
             mediaType: .audio,
@@ -841,11 +827,9 @@ class AudioVideoCaptureProcess: NSObject {
         
         // Stop audio engines
         for (streamId, engine) in audioEngines {
-            if let engine = engine as? AVAudioEngine {
-                engine.stop()
-                engine.inputNode.removeTap(onBus: 0)
-                logger.log("Stopped audio engine: \(streamId)")
-            }
+            engine.stop()
+            engine.inputNode.removeTap(onBus: 0)
+            logger.log("Stopped audio engine: \(streamId)")
         }
         
         // Stop screen captures
@@ -898,10 +882,8 @@ class AudioVideoCaptureProcess: NSObject {
         
         // Pause audio engines
         for (streamId, engine) in audioEngines {
-            if let engine = engine as? AVAudioEngine {
-                engine.pause()
-                logger.log("Paused audio engine: \(streamId)")
-            }
+            engine.pause()
+            logger.log("Paused audio engine: \(streamId)")
         }
         
         logger.log("All streams paused")
@@ -932,8 +914,8 @@ class AudioVideoCaptureProcess: NSObject {
         let sanitizedName = name.replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: ":", with: "_")
             .replacingOccurrences(of: " ", with: "_")
-        let extension = type == "audio" ? "m4a" : "mp4"
-        return "\(saveDirectory!)/video/\(type)_\(sanitizedName)_\(Int(timestamp)).\(extension)"
+        let fileExtension = type == "audio" ? "m4a" : "mp4"
+        return "\(saveDirectory!)/video/\(type)_\(sanitizedName)_\(Int(timestamp)).\(fileExtension)"
     }
     
     // MARK: - Response Handling
@@ -1036,6 +1018,9 @@ extension AudioVideoCaptureProcess: SCStreamOutput {
             handleVideoSampleBuffer(sampleBuffer, from: stream)
         case .audio:
             handleAudioSampleBuffer(sampleBuffer, from: stream)
+        case .microphone:
+            // Handle microphone input if needed
+            handleAudioSampleBuffer(sampleBuffer, from: stream)
         @unknown default:
             break
         }
@@ -1114,16 +1099,17 @@ extension AudioVideoCaptureProcess: SCStreamOutput {
         buffer.frameLength = AVAudioFrameCount(frameCount)
         
         // Copy audio data
-        do {
-            try CMSampleBufferCopyPCMDataIntoAudioBufferList(
-                sampleBuffer,
-                at: 0,
-                frameCount: Int32(frameCount),
-                into: buffer.mutableAudioBufferList
-            )
+        let status = CMSampleBufferCopyPCMDataIntoAudioBufferList(
+            sampleBuffer,
+            at: 0,
+            frameCount: Int32(frameCount),
+            into: buffer.mutableAudioBufferList
+        )
+        
+        if status == noErr {
             return buffer
-        } catch {
-            logger.logError("Failed to copy PCM data", error: error)
+        } else {
+            logger.log("Failed to copy PCM data, status: \(status)")
             return nil
         }
     }
