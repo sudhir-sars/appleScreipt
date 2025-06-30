@@ -8,9 +8,15 @@
     "start:test": "bun run capture-runner.ts --test",
     "demo": "bun run capture-runner.ts --demo",
     "demo:test": "bun run capture-runner.ts --test --demo",
-    "compile": "swiftc -o CaptureProcess CaptureProcess.swift -framework AVFoundation -framework ScreenCaptureKit -framework CoreGraphics",
+    "build": "./build.sh",
+    "build:release": "./build.sh --release",
+    "build:clean": "./build.sh --clean",
+    "build:verbose": "./build.sh --verbose",
     "dev": "bun run --watch capture-runner.ts",
-    "dev:test": "bun run --watch capture-runner.ts --test"
+    "dev:test": "bun run --watch capture-runner.ts --test",
+    "clean": "./build.sh --clean",
+    "setup": "bun install && chmod +x build.sh && ./build.sh",
+    "postinstall": "chmod +x build.sh"
   },
   "devDependencies": {
     "@types/bun": "latest",
