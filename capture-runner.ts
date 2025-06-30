@@ -64,9 +64,8 @@ interface CommandSequence {
 // Configuration
 const SWIFT_EXECUTABLE_PATH = './CaptureProcess';
 const TEST_MODE = process.argv.includes('--test');
-const DEBUG_MODE = process.argv.includes('--debug');
 
-// ANSI color codes - Fixed missing magenta color
+// ANSI color codes
 const colors = {
   reset: '\x1b[0m',
   bright: '\x1b[1m',
@@ -74,13 +73,12 @@ const colors = {
   yellow: '\x1b[33m',
   blue: '\x1b[34m',
   red: '\x1b[31m',
-  cyan: '\x1b[36m',
-  magenta: '\x1b[35m'  // Added missing magenta color
+  cyan: '\x1b[36m'
 } as const;
 
 type LogType = 'info' | 'success' | 'error' | 'warn' | 'step';
 
-// Enhanced logger with debug support
+// Logger with timestamp
 function log(message: string, type: LogType = 'info'): void {
   const timestamp = new Date().toISOString();
   const typeColors: Record<LogType, string> = {
@@ -94,67 +92,25 @@ function log(message: string, type: LogType = 'info'): void {
   console.log(`${typeColors[type]}[${timestamp}] ${message}${colors.reset}`);
 }
 
-function debug(message: string): void {
-  if (DEBUG_MODE) {
-    console.log(`${colors.magenta}[DEBUG] ${message}${colors.reset}`);
-  }
-}
-
-// Enhanced executable check
+// Check if Swift executable exists
 function checkExecutable(): void {
   log('Checking if Swift executable exists...', 'step');
   
-  const fullPath = SWIFT_EXECUTABLE_PATH;
-  debug(`Looking for executable at: ${fullPath}`);
-  
-  if (!existsSync(fullPath)) {
-    log(`Swift executable not found at: ${fullPath}`, 'error');
-    log('Current directory: ' + process.cwd(), 'error');
-    log('Directory contents:', 'error');
-    
-    // List directory contents to help debug
-    try {
-      const fs = require('fs');
-      const files = fs.readdirSync('.');
-      files.forEach((file: string) => {
-        console.log(`  - ${file}`);
-      });
-    } catch (e) {
-      console.log('  Could not list directory contents');
-    }
-    
-    log('\nPlease compile the Swift code first with:', 'info');
-    log('bun run build', 'info');
-    log('or', 'info');
-    log('./build.sh', 'info');
+  if (!existsSync(SWIFT_EXECUTABLE_PATH)) {
+    log(`Swift executable not found at: ${SWIFT_EXECUTABLE_PATH}`, 'error');
+    log('Please compile the Swift code first with:', 'info');
+    log('bun run compile', 'info');
     process.exit(1);
-  }
-  
-  // Check if it's executable
-  try {
-    const fs = require('fs');
-    const stats = fs.statSync(fullPath);
-    const isExecutable = (stats.mode & parseInt('0111', 8)) !== 0;
-    
-    if (!isExecutable) {
-      log('File exists but is not executable', 'warn');
-      log('Making it executable...', 'info');
-      require('child_process').execSync(`chmod +x ${fullPath}`);
-      log('Made executable', 'success');
-    }
-  } catch (e) {
-    debug(`Error checking executable permissions: ${e}`);
   }
   
   log('Swift executable found!', 'success');
 }
 
-// Enhanced process manager with better error handling
+// Capture process manager class
 class CaptureProcessManager {
   private testMode: boolean;
   private process: ChildProcess | null = null;
   private isRunning: boolean = false;
-  private startupTimeout: NodeJS.Timeout | null = null;
 
   constructor(testMode: boolean = false) {
     this.testMode = testMode;
@@ -164,116 +120,51 @@ class CaptureProcessManager {
     log(`Starting capture process in ${this.testMode ? 'TEST' : 'NORMAL'} mode...`, 'step');
     
     const args = this.testMode ? ['--testmode'] : [];
-    debug(`Spawn command: ${SWIFT_EXECUTABLE_PATH} ${args.join(' ')}`);
     
-    try {
-      this.process = spawn(SWIFT_EXECUTABLE_PATH, args, {
-        stdio: ['pipe', 'pipe', 'pipe'],
-        env: { ...process.env }
-      });
-      
-      // Set startup timeout
-      this.startupTimeout = setTimeout(() => {
-        if (!this.isRunning) {
-          log('Swift process failed to start within 5 seconds', 'error');
-          this.cleanup();
-        }
-      }, 5000);
-      
-      if (this.process.pid) {
-        debug(`Swift process spawned with PID: ${this.process.pid}`);
-        this.isRunning = true;
-        log(`Swift process started with PID: ${this.process.pid}`, 'success');
-        
-        this.setupEventHandlers();
-        this.setupIPC();
-      } else {
-        throw new Error('Failed to get process PID');
-      }
-    } catch (error: any) {
-      log(`Failed to spawn Swift process: ${error.message}`, 'error');
-      log('Make sure the Swift executable exists and is compiled', 'error');
-      this.isRunning = false;
-      process.exit(1);
-    }
+    this.process = spawn(SWIFT_EXECUTABLE_PATH, args, {
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+    
+    this.isRunning = true;
+    log(`Swift process started with PID: ${this.process.pid}`, 'success');
+    
+    this.setupEventHandlers();
+    this.setupIPC();
   }
 
   private setupEventHandlers(): void {
     if (!this.process) return;
 
-    this.process.on('spawn', () => {
-      debug('Process spawn event fired');
-      if (this.startupTimeout) {
-        clearTimeout(this.startupTimeout);
-        this.startupTimeout = null;
+    this.process.on('exit', (code, signal) => {
+      this.isRunning = false;
+      if (code === 0) {
+        log('Swift process exited successfully', 'success');
+      } else {
+        log(`Swift process exited with code: ${code}, signal: ${signal}`, 'error');
       }
     });
 
     this.process.on('error', (error) => {
-      log(`Process error: ${error.message}`, 'error');
-      if (error.message.includes('ENOENT')) {
-        log('The Swift executable was not found', 'error');
-        log('Please run: bun run build', 'error');
-      } else if (error.message.includes('EACCES')) {
-        log('Permission denied. The file might not be executable', 'error');
-        log('Please run: chmod +x ' + SWIFT_EXECUTABLE_PATH, 'error');
-      }
-      this.cleanup();
-    });
-
-    this.process.on('exit', (code, signal) => {
+      log(`Failed to start Swift process: ${error.message}`, 'error');
       this.isRunning = false;
-      debug(`Process exited with code: ${code}, signal: ${signal}`);
-      
-      if (code === 0) {
-        log('Swift process exited successfully', 'success');
-      } else if (code === null && signal) {
-        log(`Swift process terminated by signal: ${signal}`, 'warn');
-      } else {
-        log(`Swift process exited with code: ${code}`, 'error');
-      }
-      
-      this.cleanup();
     });
 
     this.process.stderr?.on('data', (data: Buffer) => {
-      const error = data.toString().trim();
-      if (error) {
-        log(`Swift Error: ${error}`, 'error');
-        debug(`Full stderr: ${error}`);
-      }
-    });
-
-    // Add stdout data handler for non-JSON output
-    this.process.stdout?.on('data', (data: Buffer) => {
-      const output = data.toString();
-      debug(`Raw stdout: ${output}`);
-      
-      // Try to parse as JSON first
-      try {
-        const lines = output.trim().split('\n');
-        for (const line of lines) {
-          if (line.trim()) {
-            try {
-              const response = JSON.parse(line) as CaptureResponse;
-              this.handleResponse(response);
-            } catch {
-              // Not JSON, just log it
-              if (!line.includes('{') && !line.includes('}')) {
-                log(`Swift: ${line}`, 'info');
-              }
-            }
-          }
-        }
-      } catch (error) {
-        debug(`Failed to parse output: ${error}`);
-      }
+      log(`Swift Error: ${data.toString().trim()}`, 'error');
     });
   }
 
   private setupIPC(): void {
-    // Already handled in setupEventHandlers
-    debug('IPC setup complete');
+    if (!this.process?.stdout) return;
+
+    this.process.stdout.on('data', (data: Buffer) => {
+      try {
+        const response = JSON.parse(data.toString()) as CaptureResponse;
+        this.handleResponse(response);
+      } catch (error) {
+        log(`Swift Output: ${data.toString().trim()}`, 'info');
+      }
+    });
   }
 
   private handleResponse(response: CaptureResponse): void {
@@ -317,48 +208,13 @@ class CaptureProcessManager {
   }
 
   sendCommand(command: string): void {
-    if (!this.process) {
-      log('Process object is null', 'error');
+    if (!this.isRunning || !this.process?.stdin) {
+      log('Cannot send command - process is not running', 'error');
       return;
     }
 
-    if (!this.isRunning) {
-      log('Process is not running', 'error');
-      debug(`Process state: running=${this.isRunning}, pid=${this.process.pid}`);
-      return;
-    }
-
-    if (!this.process.stdin) {
-      log('Process stdin is not available', 'error');
-      return;
-    }
-
-    try {
-      log(`Sending command: ${command}`, 'step');
-      debug(`Writing to stdin: '${command}\\n'`);
-      
-      const success = this.process.stdin.write(command + '\n', (error) => {
-        if (error) {
-          log(`Failed to write command: ${error.message}`, 'error');
-        } else {
-          debug('Command written successfully');
-        }
-      });
-      
-      if (!success) {
-        debug('Write returned false, stream might be full');
-      }
-    } catch (error: any) {
-      log(`Exception sending command: ${error.message}`, 'error');
-    }
-  }
-
-  private cleanup(): void {
-    if (this.startupTimeout) {
-      clearTimeout(this.startupTimeout);
-      this.startupTimeout = null;
-    }
-    this.isRunning = false;
+    log(`Sending command: ${command}`, 'step');
+    this.process.stdin.write(command + '\n');
   }
 
   stop(): void {
@@ -369,10 +225,8 @@ class CaptureProcessManager {
 
     log('Stopping capture process...', 'step');
     
-    // First try to stop streams gracefully
     this.sendCommand('stop_stream');
     
-    // Give it time to clean up
     setTimeout(() => {
       if (this.isRunning && this.process) {
         log('Terminating process...', 'warn');
@@ -380,149 +234,141 @@ class CaptureProcessManager {
       }
     }, 2000);
   }
-
-  isProcessRunning(): boolean {
-    return this.isRunning;
-  }
 }
 
-// Added missing utility functions
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
+// Utility functions
+const sleep = (ms: number): Promise<void> => 
+  new Promise(resolve => setTimeout(resolve, ms));
 
-// Demo mode functionality
-async function runDemo(manager: CaptureProcessManager): Promise<void> {
-  log('Running demonstration mode...', 'step');
-  
-  const demoSequence: CommandSequence[] = [
-    { cmd: 'list_streams', wait: 2000, desc: 'Listing available streams' },
-    { cmd: 'start_stream', wait: 5000, desc: 'Starting capture' },
-    { cmd: 'status', wait: 2000, desc: 'Checking status' },
-    { cmd: 'stop_stream', wait: 2000, desc: 'Stopping capture' }
+// Demo workflow
+async function runDemo(): Promise<void> {
+  log(`${colors.bright}Starting Audio/Video Capture Demo${colors.reset}`, 'info');
+  log(`Mode: ${TEST_MODE ? 'TEST (saving to disk)' : 'NORMAL (streaming only)'}`, 'info');
+  log('=' + '='.repeat(50), 'info');
+
+  const manager = new CaptureProcessManager(TEST_MODE);
+  manager.start();
+
+  await sleep(1000);
+
+  const commands: CommandSequence[] = [
+    { cmd: 'check_input_audio_access', wait: 2000, desc: 'Checking microphone permissions' },
+    { cmd: 'check_screen_capture_access', wait: 2000, desc: 'Checking screen capture permissions' },
+    { cmd: 'start_capture_default', wait: 5000, desc: 'Starting default capture (default mic + system audio)' },
+    { cmd: 'pause_stream', wait: 3000, desc: 'Pausing all streams' },
+    { cmd: 'stop_stream', wait: 2000, desc: 'Stopping all streams' },
+    { cmd: 'start_capture_all', wait: 5000, desc: 'Starting full capture (all devices + all screens)' }
   ];
 
-  for (const step of demoSequence) {
-    log(step.desc, 'step');
-    manager.sendCommand(step.cmd);
-    await sleep(step.wait);
+  for (const { cmd, wait, desc } of commands) {
+    log(`\n${colors.bright}${desc}${colors.reset}`, 'info');
+    manager.sendCommand(cmd);
+    await sleep(wait);
   }
 
-  log('Demo completed', 'success');
+  log('\nCapturing for 10 seconds...', 'info');
+  await sleep(10000);
+
+  log('\nStopping capture demo...', 'step');
+  manager.stop();
+
+  await sleep(3000);
+  
+  log(`${colors.bright}Demo completed!${colors.reset}`, 'success');
+  if (TEST_MODE) {
+    log('Check the save directory for recorded files', 'info');
+  }
 }
 
-// Interactive mode functionality
-async function runInteractive(manager: CaptureProcessManager): Promise<void> {
-  log('Starting interactive mode...', 'step');
-  log('Available commands:', 'info');
-  log('  list_streams - List available audio/video streams', 'info');
-  log('  start_stream - Start capturing', 'info');
-  log('  stop_stream - Stop capturing', 'info');
-  log('  status - Check current status', 'info');
-  log('  exit - Exit the application', 'info');
-  log('', 'info');
-
+// Interactive mode
+async function runInteractive(): Promise<void> {
   const rl = readline.createInterface({
     input: process.stdin,
-    output: process.stdout,
-    prompt: `${colors.cyan}capture> ${colors.reset}`
+    output: process.stdout
   });
 
-  rl.prompt();
+  log(`${colors.bright}Audio/Video Capture - Interactive Mode${colors.reset}`, 'info');
+  log(`Mode: ${TEST_MODE ? 'TEST (saving to disk)' : 'NORMAL (streaming only)'}`, 'info');
+  
+  const manager = new CaptureProcessManager(TEST_MODE);
+  manager.start();
+
+  await sleep(1000);
+
+  const showMenu = (): void => {
+    console.log(`\n${colors.cyan}Available commands:${colors.reset}`);
+    console.log('1. check_input_audio_access  - Check microphone permissions');
+    console.log('2. check_screen_capture_access - Check screen capture permissions');
+    console.log('3. start_capture_default     - Start default capture');
+    console.log('4. start_capture_all         - Start capturing all devices');
+    console.log('5. pause_stream              - Pause all streams');
+    console.log('6. stop_stream               - Stop all streams');
+    console.log('7. exit                      - Exit the program');
+    console.log('');
+  };
+
+  showMenu();
 
   rl.on('line', (input: string) => {
-    const command = input.trim().toLowerCase();
-    
-    if (command === 'exit' || command === 'quit') {
-      log('Exiting interactive mode...', 'step');
+    const commandMap: Record<string, string> = {
+      '1': 'check_input_audio_access',
+      '2': 'check_screen_capture_access',
+      '3': 'start_capture_default',
+      '4': 'start_capture_all',
+      '5': 'pause_stream',
+      '6': 'stop_stream',
+      '7': 'exit'
+    };
+
+    const command = commandMap[input] || input;
+
+    if (command === 'exit') {
+      log('Exiting...', 'info');
       manager.stop();
-      rl.close();
-      return;
-    }
-    
-    if (command === 'help') {
-      log('Available commands:', 'info');
-      log('  list_streams - List available audio/video streams', 'info');
-      log('  start_stream - Start capturing', 'info');
-      log('  stop_stream - Stop capturing', 'info');
-      log('  status - Check current status', 'info');
-      log('  exit - Exit the application', 'info');
-    } else if (command) {
+      setTimeout(() => {
+        rl.close();
+        process.exit(0);
+      }, 2000);
+    } else if (command in commandMap || Object.values(commandMap).includes(command)) {
       manager.sendCommand(command);
+    } else {
+      log('Invalid command', 'error');
     }
-    
-    rl.prompt();
+
+    setTimeout(showMenu, 1000);
   });
 
   rl.on('close', () => {
-    log('Interactive mode closed', 'info');
     manager.stop();
-    process.exit(0);
-  });
-
-  // Handle Ctrl+C gracefully
-  process.on('SIGINT', () => {
-    log('\nReceived SIGINT, shutting down gracefully...', 'warn');
-    manager.stop();
-    rl.close();
     process.exit(0);
   });
 }
 
-// Main function
+// Main execution
 async function main(): Promise<void> {
-  log('Starting Capture Process Manager', 'step');
-  
-  // Add debug info at startup
-  if (DEBUG_MODE) {
-    console.log(`${colors.magenta}=== DEBUG MODE ENABLED ===${colors.reset}`);
-    console.log(`Working directory: ${process.cwd()}`);
-    console.log(`Node version: ${process.version}`);
-    console.log(`Platform: ${process.platform}`);
-    console.log(`Arguments: ${process.argv.join(' ')}`);
-    console.log('');
-  }
-
-  // Check if executable exists
   checkExecutable();
 
-  // Create and start the capture process manager
-  const manager = new CaptureProcessManager(TEST_MODE);
-  
-  // Handle process termination gracefully
-  process.on('SIGTERM', () => {
-    log('Received SIGTERM, shutting down...', 'warn');
-    manager.stop();
-    process.exit(0);
-  });
-
-  process.on('SIGINT', () => {
-    log('Received SIGINT, shutting down...', 'warn');
-    manager.stop();
-    process.exit(0);
-  });
-
-  // Start the process
-  manager.start();
-
-  // Wait a bit for the process to start
-  await sleep(1000);
-
-  // Check if we should run in demo mode
   if (process.argv.includes('--demo')) {
-    await runDemo(manager);
-    manager.stop();
+    await runDemo();
+    process.exit(0);
   } else {
-    // Run in interactive mode
-    await runInteractive(manager);
+    await runInteractive();
   }
 }
+
+// Handle process termination
+process.on('SIGINT', () => {
+  log('\nReceived SIGINT, cleaning up...', 'warn');
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  log('\nReceived SIGTERM, cleaning up...', 'warn');
+  process.exit(0);
+});
 
 // Start the application
 main().catch(error => {
   log(`Fatal error: ${error.message}`, 'error');
-  if (DEBUG_MODE && error.stack) {
-    console.error(error.stack);
-  }
   process.exit(1);
 });
