@@ -702,13 +702,13 @@ class AudioVideoCaptureProcess: NSObject {
         logger.log("Starting audio capture for device: \(device.localizedName)")
         
         return await withCheckedContinuation { continuation in
-            captureQueue.async { [weak self] in
-                guard let self = self else {
-                    continuation.resume(returning: false)
-                    return
-                }
-                
-                let result = self.startAudioCaptureSync(device: device, streamId: streamId)
+            // Create a local copy of what we need to avoid capturing self
+            let captureQueue = self.captureQueue
+            let logger = self.logger
+            
+            captureQueue.async {
+                let process = AudioVideoCaptureProcess.shared
+                let result = process.startAudioCaptureSync(device: device, streamId: streamId)
                 continuation.resume(returning: result)
             }
         }
@@ -736,10 +736,10 @@ class AudioVideoCaptureProcess: NSObject {
             let deviceUID = device.uniqueID as CFString
             var uidString = deviceUID as NSString
             
-            // Create a copy of deviceID for the closure
-            var localDeviceID = deviceID
+            // Use a separate variable for the translation
+            var translationOutput: AudioDeviceID = 0
             
-            withUnsafeMutablePointer(to: &localDeviceID) { deviceIDPtr in
+            withUnsafeMutablePointer(to: &translationOutput) { deviceIDPtr in
                 withUnsafePointer(to: &uidString) { uidPtr in
                     var translation = AudioValueTranslation(
                         mInputData: UnsafeMutableRawPointer(mutating: uidPtr),
@@ -759,10 +759,13 @@ class AudioVideoCaptureProcess: NSObject {
                     )
                     
                     if status == noErr {
-                        deviceID = localDeviceID
+                        // Status is good, we'll use the result after the closure
                     }
                 }
             }
+            
+            // Now assign the result
+            deviceID = translationOutput
             
             if deviceID != 0 {
                 // Set the input device
