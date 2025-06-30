@@ -132,10 +132,9 @@ struct CaptureResponse: Codable {
 
 // MARK: - Main Capture Process
 
-class AudioVideoCaptureProcess: NSObject {
-    static let shared = AudioVideoCaptureProcess()
+// Replace lines 110–687 with this
+actor AudioVideoCaptureProcess {
     private let logger = FileLogger.shared
-    
     private var isTestMode = false
     private var saveDirectory: String?
     private var activeStreams: [String: Any] = [:]
@@ -146,14 +145,14 @@ class AudioVideoCaptureProcess: NSObject {
     private var streamToPathMapping: [SCStream: String] = [:]
     private var screenRecordingAuthorized = false
     private var microphoneAuthorized = false
-    
     private let ipcQueue = DispatchQueue(label: "com.capture.ipc", qos: .userInteractive)
     private let captureQueue = DispatchQueue(label: "com.capture.main", qos: .userInitiated)
-    
     private var inputHandler: FileHandle?
-    
-    override init() {
-        super.init()
+
+    // Singleton replacement for actor
+    static let shared = AudioVideoCaptureProcess()
+
+    init() {
         logger.log("AudioVideoCaptureProcess initializing...")
         
         // Setup signal handlers for graceful shutdown
@@ -167,9 +166,11 @@ class AudioVideoCaptureProcess: NSObject {
             exit(0)
         }
         
-        processCommandLineArguments()
-        checkInitialPermissions()
-        setupIPC()
+        Task {
+            await processCommandLineArguments()
+            await checkInitialPermissions()
+            await setupIPC()
+        }
     }
     
     private func processCommandLineArguments() {
@@ -182,24 +183,19 @@ class AudioVideoCaptureProcess: NSObject {
         }
     }
     
-    private func checkInitialPermissions() {
+    private func checkInitialPermissions() async {
         logger.log("Checking initial permissions...")
         
-        // Check microphone permission
         let audioStatus = AVCaptureDevice.authorizationStatus(for: .audio)
         microphoneAuthorized = (audioStatus == .authorized)
         logger.log("Initial microphone permission: \(audioStatus.rawValue) (authorized: \(microphoneAuthorized))")
         
-        // Check screen recording permission
-        Task {
-            await checkScreenRecordingPermission()
-        }
+        await checkScreenRecordingPermission()
     }
     
     @MainActor
     private func checkScreenRecordingPermission() async {
         do {
-            // Try to create shareable content to check permission
             _ = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
             screenRecordingAuthorized = true
             logger.log("Screen recording permission: granted")
@@ -229,9 +225,7 @@ class AudioVideoCaptureProcess: NSObject {
         }
     }
     
-    // MARK: - IPC Setup
-    
-    private func setupIPC() {
+    private func setupIPC() async {
         logger.log("Setting up IPC communication...")
         
         inputHandler = FileHandle.standardInput
@@ -245,122 +239,105 @@ class AudioVideoCaptureProcess: NSObject {
                 return
             }
             
-            self.logger.log("Received command: \(commandString)")
-            self.handleCommand(commandString)
+            logger.log("Received command: \(commandString)")
+            Task {
+                await self.handleCommand(commandString)
+            }
         }
         
         logger.log("IPC setup complete, waiting for commands...")
     }
     
-    private func handleCommand(_ command: String) {
-        captureQueue.async { [weak self] in
-            guard let self = self else { return }
-            
-            self.logger.log("Processing command: \(command)")
-            
-            switch command {
-            case "check_input_audio_access":
-                self.checkInputAudioAccess()
-            case "check_screen_capture_access":
-                self.checkScreenCaptureAccess()
-            case "start_capture_default":
-                self.startCaptureDefault()
-            case "start_capture_all":
-                self.startCaptureAll()
-            case "stop_stream":
-                self.stopAllStreams()
-            case "pause_stream":
-                self.pauseAllStreams()
-            default:
-                self.logger.logError("Unknown command: \(command)")
-                self.sendErrorResponse(operation: "unknown", code: "UNKNOWN_COMMAND", message: "Unknown command: \(command)")
-            }
+    private func handleCommand(_ command: String) async {
+        logger.log("Processing command: \(command)")
+        
+        switch command {
+        case "check_input_audio_access":
+            await checkInputAudioAccess()
+        case "check_screen_capture_access":
+            await checkScreenCaptureAccess()
+        case "start_capture_default":
+            await startCaptureDefault()
+        case "start_capture_all":
+            await startCaptureAll()
+        case "stop_stream":
+            await stopAllStreams()
+        case "pause_stream":
+            await pauseAllStreams()
+        default:
+            logger.logError("Unknown command: \(command)")
+            await sendErrorResponse(operation: "unknown", code: "UNKNOWN_COMMAND", message: "Unknown command: \(command)")
         }
     }
     
-    // MARK: - Permission Checking
-    
-    private func checkInputAudioAccess() {
+    private func checkInputAudioAccess() async {
         logger.log("Checking input audio access...")
         let status = AVCaptureDevice.authorizationStatus(for: .audio)
         
         switch status {
         case .notDetermined:
             logger.log("Audio permission not determined, requesting...")
-            AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
-                self?.microphoneAuthorized = granted
-                self?.logger.log("Audio permission request result: \(granted)")
-                self?.sendPermissionResponse(operation: "check_input_audio_access", type: "microphone", granted: granted)
-            }
+            let granted = await AVCaptureDevice.requestAccess(for: .audio)
+            microphoneAuthorized = granted
+            logger.log("Audio permission request result: \(granted)")
+            await sendPermissionResponse(operation: "check_input_audio_access", type: "microphone", granted: granted)
         case .authorized:
             microphoneAuthorized = true
             logger.log("Audio permission already authorized")
-            sendPermissionResponse(operation: "check_input_audio_access", type: "microphone", granted: true)
+            await sendPermissionResponse(operation: "check_input_audio_access", type: "microphone", granted: true)
         default:
             microphoneAuthorized = false
             logger.log("Audio permission denied or restricted")
-            sendPermissionResponse(operation: "check_input_audio_access", type: "microphone", granted: false)
+            await sendPermissionResponse(operation: "check_input_audio_access", type: "microphone", granted: false)
         }
     }
     
-    private func checkScreenCaptureAccess() {
+    private func checkScreenCaptureAccess() async {
         logger.log("Checking screen capture access...")
         
-        Task {
-            var granted = false
+        var granted = false
+        do {
+            _ = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
+            granted = true
+            screenRecordingAuthorized = true
+            logger.log("Screen capture permission check: granted")
+        } catch {
+            granted = false
+            screenRecordingAuthorized = false
+            logger.log("Screen capture permission check: denied - \(error)")
             
-            do {
-                // Try to access shareable content to verify permission
-                _ = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
-                granted = true
-                screenRecordingAuthorized = true
-                logger.log("Screen capture permission check: granted")
-            } catch {
-                granted = false
-                screenRecordingAuthorized = false
-                logger.log("Screen capture permission check: denied - \(error)")
-                
-                // Open System Preferences to grant permission
-                if !screenRecordingAuthorized {
-                    logger.log("Prompting user to grant screen capture access...")
-                    // This will prompt the user or open System Preferences
-                    CGRequestScreenCaptureAccess()
-                }
+            if !screenRecordingAuthorized {
+                logger.log("Prompting user to grant screen capture access...")
+                CGRequestScreenCaptureAccess()
             }
-            
-            sendPermissionResponse(operation: "check_screen_capture_access", type: "screenCapture", granted: granted)
         }
+        
+        await sendPermissionResponse(operation: "check_screen_capture_access", type: "screenCapture", granted: granted)
     }
     
-    // MARK: - Capture Operations
-    
-    private func startCaptureDefault() {
+    private func startCaptureDefault() async {
         logger.log("Starting default capture...")
         
-        // First ensure we have microphone permission
         guard microphoneAuthorized else {
             logger.logError("Microphone permission not authorized")
             
-            // Request permission if not determined
             if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
-                AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
-                    if granted {
-                        self?.microphoneAuthorized = true
-                        // Retry the capture
-                        self?.startCaptureDefault()
-                    } else {
-                        self?.sendErrorResponse(
-                            operation: "start_capture_default",
-                            code: "PERMISSION_DENIED",
-                            message: "Microphone permission not granted",
-                            details: "User denied microphone access"
-                        )
-                    }
+                let granted = await AVCaptureDevice.requestAccess(for: .audio)
+                if granted {
+                    microphoneAuthorized = true
+                    await startCaptureDefault()
+                } else {
+                    await sendErrorResponse(
+                        operation: "start_capture_default",
+                        code: "PERMISSION_DENIED",
+                        message: "Microphone permission not granted",
+                        details: "User denied microphone access"
+                    )
                 }
                 return
             }
             
-            sendErrorResponse(
+            await sendErrorResponse(
                 operation: "start_capture_default",
                 code: "PERMISSION_DENIED",
                 message: "Microphone permission not granted",
@@ -371,7 +348,7 @@ class AudioVideoCaptureProcess: NSObject {
         
         guard screenRecordingAuthorized else {
             logger.logError("Screen recording permission not authorized")
-            sendErrorResponse(
+            await sendErrorResponse(
                 operation: "start_capture_default",
                 code: "PERMISSION_DENIED",
                 message: "Screen recording permission not granted",
@@ -380,18 +357,15 @@ class AudioVideoCaptureProcess: NSObject {
             return
         }
         
-        Task {
-            await captureDefaultDevices()
-        }
+        await captureDefaultDevices()
     }
     
-    private func startCaptureAll() {
+    private func startCaptureAll() async {
         logger.log("Starting capture all...")
         
-        // First ensure we have permissions
         guard microphoneAuthorized && screenRecordingAuthorized else {
             logger.logError("Permissions not granted - Audio: \(microphoneAuthorized), Screen: \(screenRecordingAuthorized)")
-            sendErrorResponse(
+            await sendErrorResponse(
                 operation: "start_capture_all",
                 code: "PERMISSION_DENIED",
                 message: "Required permissions not granted",
@@ -400,9 +374,7 @@ class AudioVideoCaptureProcess: NSObject {
             return
         }
         
-        Task {
-            await captureAllDevices()
-        }
+        await captureAllDevices()
     }
     
     private func captureDefaultDevices() async {
@@ -410,7 +382,6 @@ class AudioVideoCaptureProcess: NSObject {
         var audioStreams: [StreamInfo] = []
         let videoStreams: [VideoStreamInfo] = []
         
-        // Try multiple methods to get default input
         if let defaultInput = await getDefaultInputDevice() {
             logger.log("Found default input device: \(defaultInput.localizedName)")
             let streamId = UUID().uuidString
@@ -422,14 +393,13 @@ class AudioVideoCaptureProcess: NSObject {
                     isDefault: true,
                     type: "input",
                     status: "active",
-                    filePath: isTestMode ? getAudioFilePath(deviceName: "input_\(defaultInput.localizedName)") : nil
+                    filePath: isTestMode ? await getAudioFilePath(deviceName: "input_\(defaultInput.localizedName)") : nil
                 ))
             }
         } else {
-            // Try using default audio engine
             logger.log("No AVCaptureDevice found, trying default audio engine...")
             let streamId = UUID().uuidString
-            if startDefaultAudioEngine(streamId: streamId) {
+            if await startDefaultAudioEngine(streamId: streamId) {
                 audioStreams.append(StreamInfo(
                     id: streamId,
                     name: "Default Audio Input",
@@ -437,17 +407,16 @@ class AudioVideoCaptureProcess: NSObject {
                     isDefault: true,
                     type: "input",
                     status: "active",
-                    filePath: isTestMode ? getAudioFilePath(deviceName: "input_DefaultAudioInput") : nil
+                    filePath: isTestMode ? await getAudioFilePath(deviceName: "input_DefaultAudioInput") : nil
                 ))
             }
         }
         
-        // Capture system audio with minimal screen capture
         if let systemAudioStream = await captureSystemAudio() {
             audioStreams.append(systemAudioStream)
         }
         
-        sendSuccessResponse(
+        await sendSuccessResponse(
             operation: "start_capture_default",
             audioStreams: audioStreams,
             videoStreams: videoStreams
@@ -459,18 +428,15 @@ class AudioVideoCaptureProcess: NSObject {
         var audioStreams: [StreamInfo] = []
         var videoStreams: [VideoStreamInfo] = []
         
-        // First, let's list ALL audio devices using Core Audio
         listAllAudioDevices()
         
-        // Get audio devices using AVCaptureDevice
         let devices = await getAllAudioDevices()
         logger.log("AVCaptureDevice found \(devices.count) audio input devices")
         
-        // If no devices found via AVCaptureDevice, try to create a default audio engine
         if devices.isEmpty {
             logger.log("No devices found via AVCaptureDevice, trying default audio engine...")
             let streamId = UUID().uuidString
-            if startDefaultAudioEngine(streamId: streamId) {
+            if await startDefaultAudioEngine(streamId: streamId) {
                 audioStreams.append(StreamInfo(
                     id: streamId,
                     name: "Default Audio Input",
@@ -478,11 +444,10 @@ class AudioVideoCaptureProcess: NSObject {
                     isDefault: true,
                     type: "input",
                     status: "active",
-                    filePath: isTestMode ? getAudioFilePath(deviceName: "input_DefaultAudioInput") : nil
+                    filePath: isTestMode ? await getAudioFilePath(deviceName: "input_DefaultAudioInput") : nil
                 ))
             }
         } else {
-            // Process found devices
             for device in devices {
                 logger.log("Processing device: \(device.localizedName)")
                 let streamId = UUID().uuidString
@@ -495,18 +460,16 @@ class AudioVideoCaptureProcess: NSObject {
                         isDefault: device.uniqueID == defaultDevice?.uniqueID,
                         type: "input",
                         status: "active",
-                        filePath: isTestMode ? getAudioFilePath(deviceName: "input_\(device.localizedName)") : nil
+                        filePath: isTestMode ? await getAudioFilePath(deviceName: "input_\(device.localizedName)") : nil
                     ))
                 }
             }
         }
         
-        // Capture all screens and windows
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
             logger.log("Found \(content.displays.count) displays and \(content.windows.count) windows")
             
-            // Capture screens
             for (index, display) in content.displays.enumerated() {
                 logger.log("Processing display \(index): \(display.width)x\(display.height)")
                 let streamId = UUID().uuidString
@@ -515,7 +478,6 @@ class AudioVideoCaptureProcess: NSObject {
                 }
             }
             
-            // Capture windows
             for window in content.windows {
                 guard let title = window.title, !title.isEmpty else { continue }
                 logger.log("Processing window: \(title)")
@@ -525,14 +487,13 @@ class AudioVideoCaptureProcess: NSObject {
                 }
             }
             
-            // Capture system audio
             if let systemAudioStream = await captureSystemAudio() {
                 audioStreams.append(systemAudioStream)
             }
             
         } catch {
             logger.logError("Failed to get shareable content", error: error)
-            sendErrorResponse(
+            await sendErrorResponse(
                 operation: "start_capture_all",
                 code: "CAPTURE_FAILED",
                 message: "Failed to get shareable content",
@@ -541,32 +502,26 @@ class AudioVideoCaptureProcess: NSObject {
             return
         }
         
-        sendSuccessResponse(
+        await sendSuccessResponse(
             operation: "start_capture_all",
             audioStreams: audioStreams,
             videoStreams: videoStreams
         )
     }
     
-    // MARK: - Audio Capture
-    
     private func getDefaultInputDevice() async -> AVCaptureDevice? {
-        // Ensure we have permission first
         guard microphoneAuthorized else {
             logger.log("Cannot get default device without microphone authorization")
             return nil
         }
         
-        // Try to get the default audio input device
         if let device = AVCaptureDevice.default(for: .audio) {
             logger.log("Found default device via AVCaptureDevice.default: \(device.localizedName)")
             return device
         }
         
-        // If that fails, try discovery session
         let devices = await getAllAudioDevices()
         
-        // Return the first device if available
         if let firstDevice = devices.first {
             logger.log("Using first available device as default: \(firstDevice.localizedName)")
             return firstDevice
@@ -577,7 +532,6 @@ class AudioVideoCaptureProcess: NSObject {
     }
     
     private func getAllAudioDevices() async -> [AVCaptureDevice] {
-        // Ensure we have permission
         guard microphoneAuthorized else {
             logger.log("Cannot enumerate devices without microphone authorization")
             return []
@@ -650,9 +604,7 @@ class AudioVideoCaptureProcess: NSObject {
         
         logger.log("Core Audio found \(deviceCount) total audio devices")
         
-        // List each device
         for deviceID in audioDevices {
-            // Get device name
             var namePropertyAddress = AudioObjectPropertyAddress(
                 mSelector: kAudioDevicePropertyDeviceNameCFString,
                 mScope: kAudioObjectPropertyScopeGlobal,
@@ -676,7 +628,6 @@ class AudioVideoCaptureProcess: NSObject {
             if status == noErr, let deviceName = deviceName {
                 let name = deviceName as String
                 
-                // Check if it's an input device
                 var inputPropertyAddress = AudioObjectPropertyAddress(
                     mSelector: kAudioDevicePropertyStreamConfiguration,
                     mScope: kAudioDevicePropertyScopeInput,
@@ -698,33 +649,21 @@ class AudioVideoCaptureProcess: NSObject {
         }
     }
     
-    private func startAudioCapture(device: AVCaptureDevice, streamId: String) async -> Bool {
+    func startAudioCapture(device: AVCaptureDevice, streamId: String) async -> Bool {
         logger.log("Starting audio capture for device: \(device.localizedName)")
-        
-        return await withCheckedContinuation { [weak self] continuation in
-            captureQueue.async { [weak self] in
-                guard let self = self else {
-                    continuation.resume(returning: false)
-                    return
-                }
-                
-                let result = self.startAudioCaptureSync(device: device, streamId: streamId)
-                continuation.resume(returning: result)
-            }
-        }
+        let result = startAudioCaptureSync(device: device, streamId: streamId)
+        return result
     }
     
     private func startAudioCaptureSync(device: AVCaptureDevice, streamId: String) -> Bool {
         let engine = AVAudioEngine()
         
         do {
-            // Get audio unit for device selection
             guard let audioUnit = engine.inputNode.audioUnit else {
                 logger.logError("Failed to get audio unit from engine")
                 return false
             }
             
-            // Get the Core Audio device ID
             var deviceID: AudioDeviceID = 0
             var propertyAddress = AudioObjectPropertyAddress(
                 mSelector: kAudioHardwarePropertyDeviceForUID,
@@ -732,14 +671,10 @@ class AudioVideoCaptureProcess: NSObject {
                 mElement: kAudioObjectPropertyElementMain
             )
             
-            // Convert device unique ID to CFString
             let deviceUID = device.uniqueID as CFString
             var uidString = deviceUID as NSString
             
-            // Create a copy of deviceID for the closure
-            var localDeviceID = deviceID
-            
-            withUnsafeMutablePointer(to: &localDeviceID) { deviceIDPtr in
+            withUnsafeMutablePointer(to: &deviceID) { deviceIDPtr in
                 withUnsafePointer(to: &uidString) { uidPtr in
                     var translation = AudioValueTranslation(
                         mInputData: UnsafeMutableRawPointer(mutating: uidPtr),
@@ -759,15 +694,13 @@ class AudioVideoCaptureProcess: NSObject {
                     )
                     
                     if status == noErr {
-                        deviceID = localDeviceID
+                        deviceID = deviceIDPtr.pointee
                     }
                 }
             }
             
             if deviceID != 0 {
-                // Set the input device
                 let propertySize = UInt32(MemoryLayout<AudioDeviceID>.size)
-                
                 let setStatus = AudioUnitSetProperty(
                     audioUnit,
                     kAudioOutputUnitProperty_CurrentDevice,
@@ -789,7 +722,6 @@ class AudioVideoCaptureProcess: NSObject {
             let inputNode = engine.inputNode
             let format = inputNode.outputFormat(forBus: 0)
             
-            // Verify format is valid
             guard format.sampleRate > 0 && format.channelCount > 0 else {
                 logger.logError("Invalid audio format: \(format)")
                 return false
@@ -798,8 +730,11 @@ class AudioVideoCaptureProcess: NSObject {
             logger.log("Audio format: \(format.sampleRate) Hz, \(format.channelCount) channels")
             
             if isTestMode {
-                // Create audio file for saving
-                let filePath = getAudioFilePath(deviceName: device.localizedName)
+                guard let saveDirectory = saveDirectory else {
+                    logger.logError("Save directory not set in test mode")
+                    return false
+                }
+                let filePath = "\(saveDirectory)/audio/\(device.localizedName.replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: ":", with: "_").replacingOccurrences(of: " ", with: "_"))_\(Int(Date().timeIntervalSince1970)).wav"
                 let fileURL = URL(fileURLWithPath: filePath)
                 
                 let settings: [String: Any] = [
@@ -817,17 +752,17 @@ class AudioVideoCaptureProcess: NSObject {
                 
                 logger.log("Audio file created: \(filePath)")
                 
-                // Install tap to save audio
-                inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
-                    do {
-                        try self?.audioFiles[streamId]?.write(from: buffer)
-                    } catch {
-                        self?.logger.logError("Failed to write audio buffer", error: error)
+                inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
+                    Task {
+                        do {
+                            try await self.audioFiles[streamId]?.write(from: buffer)
+                        } catch {
+                            await self.logger.logError("Failed to write audio buffer", error: error)
+                        }
                     }
                 }
             } else {
-                // Just install a monitoring tap
-                inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
+                inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { _, _ in
                     // Just monitoring, not saving
                 }
             }
@@ -844,7 +779,7 @@ class AudioVideoCaptureProcess: NSObject {
         }
     }
     
-    private func startDefaultAudioEngine(streamId: String) -> Bool {
+    private func startDefaultAudioEngine(streamId: String) async -> Bool {
         logger.log("Starting default audio engine...")
         
         let engine = AVAudioEngine()
@@ -853,7 +788,6 @@ class AudioVideoCaptureProcess: NSObject {
         do {
             let format = inputNode.outputFormat(forBus: 0)
             
-            // Verify format is valid
             guard format.sampleRate > 0 && format.channelCount > 0 else {
                 logger.logError("Invalid default audio format")
                 return false
@@ -862,7 +796,11 @@ class AudioVideoCaptureProcess: NSObject {
             logger.log("Default audio format: \(format.sampleRate) Hz, \(format.channelCount) channels")
             
             if isTestMode {
-                let filePath = getAudioFilePath(deviceName: "DefaultAudioInput")
+                guard let saveDirectory = saveDirectory else {
+                    logger.logError("Save directory not set in test mode")
+                    return false
+                }
+                let filePath = "\(saveDirectory)/audio/DefaultAudioInput_\(Int(Date().timeIntervalSince1970)).wav"
                 let fileURL = URL(fileURLWithPath: filePath)
                 
                 let settings: [String: Any] = [
@@ -878,11 +816,13 @@ class AudioVideoCaptureProcess: NSObject {
                 let audioFile = try AVAudioFile(forWriting: fileURL, settings: settings)
                 audioFiles[streamId] = audioFile
                 
-                inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
-                    do {
-                        try self?.audioFiles[streamId]?.write(from: buffer)
-                    } catch {
-                        self?.logger.logError("Failed to write audio buffer", error: error)
+                inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
+                    Task {
+                        do {
+                            try await self.audioFiles[streamId]?.write(from: buffer)
+                        } catch {
+                            await self.logger.logError("Failed to write audio buffer", error: error)
+                        }
                     }
                 }
             }
@@ -904,20 +844,16 @@ class AudioVideoCaptureProcess: NSObject {
         let streamId = UUID().uuidString
         
         do {
-            // Create minimal screen capture for system audio
             let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
             guard let display = content.displays.first else {
                 logger.logError("No display found for system audio capture")
                 return nil
             }
             
-            // Exclude current app to avoid feedback
             let excludedApps = content.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
             let filter = SCContentFilter(display: display, excludingApplications: excludedApps, exceptingWindows: [])
             
             let configuration = SCStreamConfiguration()
-            
-            // Minimal configuration for audio only
             configuration.width = 2
             configuration.height = 2
             configuration.minimumFrameInterval = CMTime(value: 1, timescale: 60)
@@ -930,8 +866,12 @@ class AudioVideoCaptureProcess: NSObject {
             let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
             
             if isTestMode {
-                let audioFilePath = getAudioFilePath(deviceName: "system_SystemAudio")
-                setupSystemAudioRecording(stream: stream, filePath: audioFilePath)
+                guard let saveDirectory = saveDirectory else {
+                    logger.logError("Save directory not set in test mode")
+                    return nil
+                }
+                let audioFilePath = "\(saveDirectory)/audio/system_SystemAudio_\(Int(Date().timeIntervalSince1970)).wav"
+                await setupSystemAudioRecording(stream: stream, filePath: audioFilePath)
             }
             
             do {
@@ -948,7 +888,7 @@ class AudioVideoCaptureProcess: NSObject {
                     isDefault: false,
                     type: "system",
                     status: "active",
-                    filePath: isTestMode ? getAudioFilePath(deviceName: "system_SystemAudio") : nil
+                    filePath: isTestMode ? await getAudioFilePath(deviceName: "system_SystemAudio") : nil
                 )
             } catch {
                 logger.logError("Failed to start system audio capture", error: error)
@@ -960,12 +900,9 @@ class AudioVideoCaptureProcess: NSObject {
         }
     }
     
-    // MARK: - Video Capture
-    
     private func captureScreen(display: SCDisplay, streamId: String, isPrimary: Bool, content: SCShareableContent) async -> VideoStreamInfo? {
         logger.log("Capturing screen: \(display.displayID), primary: \(isPrimary)")
         
-        // Exclude current app
         let excludedApps = content.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
         let filter = SCContentFilter(display: display, excludingApplications: excludedApps, exceptingWindows: [])
         
@@ -1006,12 +943,16 @@ class AudioVideoCaptureProcess: NSObject {
         
         var filePaths: VideoStreamInfo.FilePaths?
         if isTestMode {
+            guard let saveDirectory = saveDirectory else {
+                logger.logError("Save directory not set in test mode")
+                return nil
+            }
             filePaths = VideoStreamInfo.FilePaths(
-                combined: getVideoFilePath(type: "combined", name: name),
-                video: getVideoFilePath(type: "video", name: name),
-                audio: getVideoFilePath(type: "audio", name: name)
+                combined: await getVideoFilePath(type: "combined", name: name),
+                video: await getVideoFilePath(type: "video", name: name),
+                audio: await getVideoFilePath(type: "audio", name: name)
             )
-            setupVideoRecording(stream: stream, filePaths: filePaths!)
+            await setupVideoRecording(stream: stream, filePaths: filePaths!)
         }
         
         do {
@@ -1035,21 +976,14 @@ class AudioVideoCaptureProcess: NSObject {
         }
     }
     
-    // MARK: - Recording Setup
-    
-    private func setupSystemAudioRecording(stream: SCStream, filePath: String) {
+    private func setupSystemAudioRecording(stream: SCStream, filePath: String) async {
         logger.log("Setting up system audio recording: \(filePath)")
         
         do {
-            // Map stream to file path
             streamToPathMapping[stream] = filePath
-            
-            // Add self as stream output delegate to receive audio samples
             try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: captureQueue)
             
-            // Create audio file for recording
             let fileURL = URL(fileURLWithPath: filePath)
-            
             let settings: [String: Any] = [
                 AVFormatIDKey: kAudioFormatLinearPCM,
                 AVSampleRateKey: 48000,
@@ -1069,21 +1003,18 @@ class AudioVideoCaptureProcess: NSObject {
         }
     }
     
-    private func setupVideoRecording(stream: SCStream, filePaths: VideoStreamInfo.FilePaths) {
+    private func setupVideoRecording(stream: SCStream, filePaths: VideoStreamInfo.FilePaths) async {
         logger.log("Setting up video recording...")
         
         do {
-            // Map stream to file paths
             if let combinedPath = filePaths.combined {
                 streamToPathMapping[stream] = combinedPath
             }
             
-            // Setup combined stream (video + audio)
             if let combinedPath = filePaths.combined {
                 let combinedURL = URL(fileURLWithPath: combinedPath)
                 let combinedWriter = try AVAssetWriter(outputURL: combinedURL, fileType: .mp4)
                 
-                // Video input
                 let videoSettings: [String: Any] = [
                     AVVideoCodecKey: AVVideoCodecType.h264,
                     AVVideoWidthKey: 1920,
@@ -1092,7 +1023,6 @@ class AudioVideoCaptureProcess: NSObject {
                 let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
                 videoInput.expectsMediaDataInRealTime = true
                 
-                // Audio input
                 let audioSettings: [String: Any] = [
                     AVFormatIDKey: kAudioFormatMPEG4AAC,
                     AVSampleRateKey: 48000,
@@ -1106,14 +1036,12 @@ class AudioVideoCaptureProcess: NSObject {
                 
                 videoWriters[combinedPath] = combinedWriter
                 
-                // Add stream output for combined capture
                 try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: captureQueue)
                 try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: captureQueue)
                 
                 logger.log("Combined video/audio writer setup complete")
             }
             
-            // Setup video-only stream
             if let videoPath = filePaths.video {
                 let videoURL = URL(fileURLWithPath: videoPath)
                 let videoWriter = try AVAssetWriter(outputURL: videoURL, fileType: .mp4)
@@ -1132,7 +1060,6 @@ class AudioVideoCaptureProcess: NSObject {
                 logger.log("Video-only writer setup complete")
             }
             
-            // Setup audio-only stream
             if let audioPath = filePaths.audio {
                 let audioURL = URL(fileURLWithPath: audioPath)
                 
@@ -1148,7 +1075,6 @@ class AudioVideoCaptureProcess: NSObject {
                 logger.log("Audio-only file setup complete")
             }
             
-            // Start all writers
             for (path, writer) in videoWriters {
                 writer.startWriting()
                 writer.startSession(atSourceTime: CMTime.zero)
@@ -1160,44 +1086,35 @@ class AudioVideoCaptureProcess: NSObject {
         }
     }
     
-    // MARK: - Stream Control
-    
-    private func stopAllStreams() {
+    private func stopAllStreams() async {
         logger.log("Stopping all streams...")
         
-        // Stop audio engines
         for (streamId, engine) in audioEngines {
             engine.stop()
             engine.inputNode.removeTap(onBus: 0)
             logger.log("Stopped audio engine: \(streamId)")
         }
         
-        // Stop screen captures
         for (streamId, stream) in screenStreams {
-            Task {
-                do {
-                    try await stream.stopCapture()
-                    logger.log("Stopped screen stream: \(streamId)")
-                } catch {
-                    logger.logError("Error stopping stream \(streamId)", error: error)
-                }
+            do {
+                try await stream.stopCapture()
+                logger.log("Stopped screen stream: \(streamId)")
+            } catch {
+                logger.logError("Error stopping stream \(streamId)", error: error)
             }
         }
         
-        // Close audio files
         for (path, _) in audioFiles {
             logger.log("Closed audio file: \(path)")
         }
         audioFiles.removeAll()
         
-        // Finalize video writers
         for (path, writer) in videoWriters {
-            writer.finishWriting {
-                self.logger.log("Finished writing video: \(path)")
+            await writer.finishWriting {
+                await self.logger.log("Finished writing video: \(path)")
             }
         }
         
-        // Clear all references
         audioEngines.removeAll()
         screenStreams.removeAll()
         videoWriters.removeAll()
@@ -1206,7 +1123,7 @@ class AudioVideoCaptureProcess: NSObject {
         
         logger.log("All streams stopped")
         
-        sendResponse(CaptureResponse(
+        await sendResponse(CaptureResponse(
             type: "success",
             operation: "stop_stream",
             timestamp: ISO8601DateFormatter().string(from: Date()),
@@ -1217,10 +1134,9 @@ class AudioVideoCaptureProcess: NSObject {
         ))
     }
     
-    private func pauseAllStreams() {
+    private func pauseAllStreams() async {
         logger.log("Pausing all streams...")
         
-        // Pause audio engines
         for (streamId, engine) in audioEngines {
             engine.pause()
             logger.log("Paused audio engine: \(streamId)")
@@ -1228,7 +1144,7 @@ class AudioVideoCaptureProcess: NSObject {
         
         logger.log("All streams paused")
         
-        sendResponse(CaptureResponse(
+        await sendResponse(CaptureResponse(
             type: "success",
             operation: "pause_stream",
             timestamp: ISO8601DateFormatter().string(from: Date()),
@@ -1239,28 +1155,32 @@ class AudioVideoCaptureProcess: NSObject {
         ))
     }
     
-    // MARK: - Helper Methods
-    
-    private func getAudioFilePath(deviceName: String) -> String {
+    private func getAudioFilePath(deviceName: String) async -> String {
+        guard let saveDirectory = saveDirectory else {
+            logger.logError("Save directory not set in test mode")
+            return ""
+        }
         let timestamp = Date().timeIntervalSince1970
         let sanitizedName = deviceName.replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: ":", with: "_")
             .replacingOccurrences(of: " ", with: "_")
-        return "\(saveDirectory!)/audio/\(sanitizedName)_\(Int(timestamp)).wav"
+        return "\(saveDirectory)/audio/\(sanitizedName)_\(Int(timestamp)).wav"
     }
     
-    private func getVideoFilePath(type: String, name: String) -> String {
+    private func getVideoFilePath(type: String, name: String) async -> String {
+        guard let saveDirectory = saveDirectory else {
+            logger.logError("Save directory not set in test mode")
+            return ""
+        }
         let timestamp = Date().timeIntervalSince1970
         let sanitizedName = name.replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: ":", with: "_")
             .replacingOccurrences(of: " ", with: "_")
         let fileExtension = type == "audio" ? "m4a" : "mp4"
-        return "\(saveDirectory!)/video/\(type)_\(sanitizedName)_\(Int(timestamp)).\(fileExtension)"
+        return "\(saveDirectory)/video/\(type)_\(sanitizedName)_\(Int(timestamp)).\(fileExtension)"
     }
     
-    // MARK: - Response Handling
-    
-    private func sendPermissionResponse(operation: String, type: String, granted: Bool) {
+    private func sendPermissionResponse(operation: String, type: String, granted: Bool) async {
         let response = CaptureResponse(
             type: granted ? "success" : "error",
             operation: operation,
@@ -1274,10 +1194,10 @@ class AudioVideoCaptureProcess: NSObject {
             ),
             data: nil
         )
-        sendResponse(response)
+        await sendResponse(response)
     }
     
-    private func sendSuccessResponse(operation: String, audioStreams: [StreamInfo], videoStreams: [VideoStreamInfo]) {
+    private func sendSuccessResponse(operation: String, audioStreams: [StreamInfo], videoStreams: [VideoStreamInfo]) async {
         let totalStreams = audioStreams.count + videoStreams.count
         let permissions = CaptureResponse.ResponseData.Metadata.Permissions(
             microphone: microphoneAuthorized ? "granted" : "denied",
@@ -1305,10 +1225,10 @@ class AudioVideoCaptureProcess: NSObject {
                 )
             )
         )
-        sendResponse(response)
+        await sendResponse(response)
     }
     
-    private func sendErrorResponse(operation: String, code: String, message: String, details: String = "") {
+    private func sendErrorResponse(operation: String, code: String, message: String, details: String = "") async {
         let response = CaptureResponse(
             type: "error",
             operation: operation,
@@ -1322,10 +1242,10 @@ class AudioVideoCaptureProcess: NSObject {
             ),
             data: nil
         )
-        sendResponse(response)
+        await sendResponse(response)
     }
     
-    private func sendResponse(_ response: CaptureResponse) {
+    private func sendResponse(_ response: CaptureResponse) async {
         do {
             let jsonData = try JSONEncoder().encode(response)
             if let jsonString = String(data: jsonData, encoding: .utf8) {
@@ -1343,86 +1263,77 @@ class AudioVideoCaptureProcess: NSObject {
 
 // MARK: - SCStream Extensions
 
+// Replace lines 689–767
 extension AudioVideoCaptureProcess: SCStreamDelegate {
     func stream(_ stream: SCStream, didStopWithError error: Error) {
-        logger.logError("Stream stopped with error", error: error)
-        
-        // Handle specific error cases
-        if error.localizedDescription.contains("interrupted") {
-            logger.log("Stream was interrupted, attempting to recover...")
-            // The stream is already stopped, just log the error
+        Task {
+            await logger.logError("Stream stopped with error", error: error)
+            
+            if error.localizedDescription.contains("interrupted") {
+                await logger.log("Stream was interrupted, attempting to recover...")
+            }
         }
     }
 }
 
 extension AudioVideoCaptureProcess: SCStreamOutput {
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of outputType: SCStreamOutputType) {
-        guard isTestMode else { return }
-        
-        switch outputType {
-        case .screen:
-            handleVideoSampleBuffer(sampleBuffer, from: stream)
-        case .audio:
-            handleAudioSampleBuffer(sampleBuffer, from: stream)
-        case .microphone:
-            // Handle microphone input if needed
-            handleAudioSampleBuffer(sampleBuffer, from: stream)
-        @unknown default:
-            logger.log("Unknown output type received")
-            break
+        Task {
+            guard await isTestMode else { return }
+            
+            switch outputType {
+            case .screen:
+                await handleVideoSampleBuffer(sampleBuffer, from: stream)
+            case .audio:
+                await handleAudioSampleBuffer(sampleBuffer, from: stream)
+            case .microphone:
+                await handleAudioSampleBuffer(sampleBuffer, from: stream)
+            @unknown default:
+                await logger.log("Unknown output type received")
+            }
         }
     }
     
-    private func handleVideoSampleBuffer(_ sampleBuffer: CMSampleBuffer, from stream: SCStream) {
+    private func handleVideoSampleBuffer(_ sampleBuffer: CMSampleBuffer, from stream: SCStream) async {
         guard CMSampleBufferDataIsReady(sampleBuffer) else { return }
         
-        // Find the appropriate video writer for this stream
         if let path = streamToPathMapping[stream],
            let writer = videoWriters[path],
            writer.status == .writing {
             
-            // Find video input
             if let videoInput = writer.inputs.first(where: { $0.mediaType == .video }),
                videoInput.isReadyForMoreMediaData {
-                
-                // Append the sample buffer
                 videoInput.append(sampleBuffer)
             }
         }
     }
     
-    private func handleAudioSampleBuffer(_ sampleBuffer: CMSampleBuffer, from stream: SCStream) {
+    private func handleAudioSampleBuffer(_ sampleBuffer: CMSampleBuffer, from stream: SCStream) async {
         guard CMSampleBufferDataIsReady(sampleBuffer) else { return }
         
-        // Convert CMSampleBuffer to PCM buffer for audio files
-        if let pcmBuffer = convertToPCMBuffer(sampleBuffer) {
-            // Write to audio file if we have a mapping
+        if let pcmBuffer = await convertToPCMBuffer(sampleBuffer) {
             if let path = streamToPathMapping[stream],
                let audioFile = audioFiles[path] {
                 do {
                     try audioFile.write(from: pcmBuffer)
                 } catch {
-                    logger.logError("Failed to write audio buffer", error: error)
+                    await logger.logError("Failed to write audio buffer", error: error)
                 }
             }
         }
         
-        // Also handle audio for video writers
         if let path = streamToPathMapping[stream],
            let writer = videoWriters[path],
            writer.status == .writing {
             
-            // Find audio input
             if let audioInput = writer.inputs.first(where: { $0.mediaType == .audio }),
                audioInput.isReadyForMoreMediaData {
-                
-                // Append the sample buffer
                 audioInput.append(sampleBuffer)
             }
         }
     }
     
-    private func convertToPCMBuffer(_ sampleBuffer: CMSampleBuffer) -> AVAudioPCMBuffer? {
+    private func convertToPCMBuffer(_ sampleBuffer: CMSampleBuffer) async -> AVAudioPCMBuffer? {
         guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer),
               let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription) else {
             return nil
@@ -1445,7 +1356,6 @@ extension AudioVideoCaptureProcess: SCStreamOutput {
         
         buffer.frameLength = AVAudioFrameCount(frameCount)
         
-        // Copy audio data
         let status = CMSampleBufferCopyPCMDataIntoAudioBufferList(
             sampleBuffer,
             at: 0,
@@ -1456,7 +1366,7 @@ extension AudioVideoCaptureProcess: SCStreamOutput {
         if status == noErr {
             return buffer
         } else {
-            logger.log("Failed to copy PCM data, status: \(status)")
+            await logger.log("Failed to copy PCM data, status: \(status)")
             return nil
         }
     }
