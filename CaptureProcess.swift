@@ -659,19 +659,21 @@ class AudioVideoCaptureProcess: NSObject {
                 mElement: kAudioObjectPropertyElementMain
             )
             
-            var deviceName: CFString = "" as CFString
-            dataSize = UInt32(MemoryLayout<CFString>.size)
+            var deviceName: CFString?
+            dataSize = UInt32(MemoryLayout<CFString?>.size)
             
-            status = AudioObjectGetPropertyData(
-                deviceID,
-                &namePropertyAddress,
-                0,
-                nil,
-                &dataSize,
-                &deviceName
-            )
+            withUnsafeMutablePointer(to: &deviceName) { ptr in
+                status = AudioObjectGetPropertyData(
+                    deviceID,
+                    &namePropertyAddress,
+                    0,
+                    nil,
+                    &dataSize,
+                    ptr
+                )
+            }
             
-            if status == noErr {
+            if status == noErr, let deviceName = deviceName {
                 let name = deviceName as String
                 
                 // Check if it's an input device
@@ -734,7 +736,10 @@ class AudioVideoCaptureProcess: NSObject {
             let deviceUID = device.uniqueID as CFString
             var uidString = deviceUID as NSString
             
-            withUnsafeMutablePointer(to: &deviceID) { deviceIDPtr in
+            // Create a copy of deviceID for the closure
+            var localDeviceID = deviceID
+            
+            withUnsafeMutablePointer(to: &localDeviceID) { deviceIDPtr in
                 withUnsafePointer(to: &uidString) { uidPtr in
                     var translation = AudioValueTranslation(
                         mInputData: UnsafeMutableRawPointer(mutating: uidPtr),
@@ -753,28 +758,32 @@ class AudioVideoCaptureProcess: NSObject {
                         &translation
                     )
                     
-                    if status == noErr && deviceID != 0 {
-                        // Set the input device
-                        let propertySize = UInt32(MemoryLayout<AudioDeviceID>.size)
-                        
-                        let setStatus = AudioUnitSetProperty(
-                            audioUnit,
-                            kAudioOutputUnitProperty_CurrentDevice,
-                            kAudioUnitScope_Global,
-                            0,
-                            deviceIDPtr,
-                            propertySize
-                        )
-                        
-                        if setStatus != noErr {
-                            logger.log("Warning: Failed to set specific audio device (status: \(setStatus)), using default")
-                        } else {
-                            logger.log("Successfully set audio device ID: \(deviceID)")
-                        }
-                    } else {
-                        logger.log("Could not get Core Audio device ID for \(device.uniqueID), using default")
+                    if status == noErr {
+                        deviceID = localDeviceID
                     }
                 }
+            }
+            
+            if deviceID != 0 {
+                // Set the input device
+                let propertySize = UInt32(MemoryLayout<AudioDeviceID>.size)
+                
+                let setStatus = AudioUnitSetProperty(
+                    audioUnit,
+                    kAudioOutputUnitProperty_CurrentDevice,
+                    kAudioUnitScope_Global,
+                    0,
+                    &deviceID,
+                    propertySize
+                )
+                
+                if setStatus != noErr {
+                    logger.log("Warning: Failed to set specific audio device (status: \(setStatus)), using default")
+                } else {
+                    logger.log("Successfully set audio device ID: \(deviceID)")
+                }
+            } else {
+                logger.log("Could not get Core Audio device ID for \(device.uniqueID), using default")
             }
             
             let inputNode = engine.inputNode
