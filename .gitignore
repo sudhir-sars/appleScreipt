@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Bun
+bun.lockb
+
+# Swift build
+CaptureProcess
+.build/
+*.xcodeproj
+
+# Test output
+*.wav
+*.mp4
+*.m4a
+*.flac
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+
+# Test directories
+CaptureTests/

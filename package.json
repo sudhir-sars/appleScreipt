@@ -1,0 +1,22 @@
+{
+  "name": "swift-capture-bun",
+  "version": "1.0.0",
+  "module": "capture-runner.ts",
+  "type": "module",
+  "scripts": {
+    "start": "bun run capture-runner.ts",
+    "start:test": "bun run capture-runner.ts --test",
+    "demo": "bun run capture-runner.ts --demo",
+    "demo:test": "bun run capture-runner.ts --test --demo",
+    "compile": "swiftc -o CaptureProcess CaptureProcess.swift -framework AVFoundation -framework ScreenCaptureKit -framework CoreGraphics",
+    "dev": "bun run --watch capture-runner.ts",
+    "dev:test": "bun run --watch capture-runner.ts --test"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/node": "^20.0.0"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  }
+}
