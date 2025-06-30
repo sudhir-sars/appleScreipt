@@ -132,8 +132,7 @@ struct CaptureResponse: Codable {
 
 // MARK: - Main Capture Process
 
-@MainActor
-final class AudioVideoCaptureProcess: NSObject {
+class AudioVideoCaptureProcess: NSObject {
     static let shared = AudioVideoCaptureProcess()
     private let logger = FileLogger.shared
     
@@ -702,7 +701,7 @@ final class AudioVideoCaptureProcess: NSObject {
     private func startAudioCapture(device: AVCaptureDevice, streamId: String) async -> Bool {
         logger.log("Starting audio capture for device: \(device.localizedName)")
         
-        return await withCheckedContinuation { continuation in
+        return await withCheckedContinuation { [weak self] continuation in
             captureQueue.async { [weak self] in
                 guard let self = self else {
                     continuation.resume(returning: false)
