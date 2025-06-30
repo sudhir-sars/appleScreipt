@@ -1,5 +1,5 @@
 import Foundation
-import AVFoundation
+@preconcurrency import AVFoundation
 import ScreenCaptureKit
 import CoreGraphics
 import CoreAudio
@@ -730,43 +730,51 @@ class AudioVideoCaptureProcess: NSObject {
                 mElement: kAudioObjectPropertyElementMain
             )
             
-            var translation = AudioValueTranslation(
-                mInputData: device.uniqueID as CFString,
-                mInputDataSize: UInt32(MemoryLayout<CFString>.size),
-                mOutputData: &deviceID,
-                mOutputDataSize: UInt32(MemoryLayout<AudioDeviceID>.size)
-            )
+            // Convert device unique ID to CFString
+            let deviceUID = device.uniqueID as CFString
+            var uidString = deviceUID as NSString
             
-            var dataSize = UInt32(MemoryLayout<AudioValueTranslation>.size)
-            let status = AudioObjectGetPropertyData(
-                AudioObjectID(kAudioObjectSystemObject),
-                &propertyAddress,
-                0,
-                nil,
-                &dataSize,
-                &translation
-            )
-            
-            if status == noErr && deviceID != 0 {
-                // Set the input device
-                let propertySize = UInt32(MemoryLayout<AudioDeviceID>.size)
-                
-                let setStatus = AudioUnitSetProperty(
-                    audioUnit,
-                    kAudioOutputUnitProperty_CurrentDevice,
-                    kAudioUnitScope_Global,
-                    0,
-                    &deviceID,
-                    propertySize
-                )
-                
-                if setStatus != noErr {
-                    logger.log("Warning: Failed to set specific audio device (status: \(setStatus)), using default")
-                } else {
-                    logger.log("Successfully set audio device ID: \(deviceID)")
+            withUnsafeMutablePointer(to: &deviceID) { deviceIDPtr in
+                withUnsafePointer(to: &uidString) { uidPtr in
+                    var translation = AudioValueTranslation(
+                        mInputData: UnsafeMutableRawPointer(mutating: uidPtr),
+                        mInputDataSize: UInt32(MemoryLayout<CFString>.size),
+                        mOutputData: UnsafeMutableRawPointer(deviceIDPtr),
+                        mOutputDataSize: UInt32(MemoryLayout<AudioDeviceID>.size)
+                    )
+                    
+                    var dataSize = UInt32(MemoryLayout<AudioValueTranslation>.size)
+                    let status = AudioObjectGetPropertyData(
+                        AudioObjectID(kAudioObjectSystemObject),
+                        &propertyAddress,
+                        0,
+                        nil,
+                        &dataSize,
+                        &translation
+                    )
+                    
+                    if status == noErr && deviceID != 0 {
+                        // Set the input device
+                        let propertySize = UInt32(MemoryLayout<AudioDeviceID>.size)
+                        
+                        let setStatus = AudioUnitSetProperty(
+                            audioUnit,
+                            kAudioOutputUnitProperty_CurrentDevice,
+                            kAudioUnitScope_Global,
+                            0,
+                            deviceIDPtr,
+                            propertySize
+                        )
+                        
+                        if setStatus != noErr {
+                            logger.log("Warning: Failed to set specific audio device (status: \(setStatus)), using default")
+                        } else {
+                            logger.log("Successfully set audio device ID: \(deviceID)")
+                        }
+                    } else {
+                        logger.log("Could not get Core Audio device ID for \(device.uniqueID), using default")
+                    }
                 }
-            } else {
-                logger.log("Could not get Core Audio device ID for \(device.uniqueID), using default")
             }
             
             let inputNode = engine.inputNode
