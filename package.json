@@ -3,6 +3,25 @@
   "version": "1.0.0",
   "module": "capture-runner.ts",
   "type": "module",
+  "description": "Audio/Video capture process using Swift and ScreenCaptureKit with Node.js IPC",
+  "author": "Your Name",
+  "license": "MIT",
+  "keywords": [
+    "audio-capture",
+    "screen-capture",
+    "screencapturekit",
+    "macos",
+    "swift",
+    "system-audio",
+    "microphone"
+  ],
+  "engines": {
+    "bun": ">=1.0.0",
+    "node": ">=18.0.0"
+  },
+  "os": [
+    "darwin"
+  ],
   "scripts": {
     "start": "bun run capture-runner.ts",
     "start:test": "bun run capture-runner.ts --test",
@@ -10,19 +29,62 @@
     "demo:test": "bun run capture-runner.ts --test --demo",
     "build": "./build.sh",
     "build:release": "./build.sh --release",
-    "build:clean": "./build.sh --clean",
+    "build:clean": "./build.sh --clean --release",
+    "build:debug": "./build.sh --clean",
     "build:verbose": "./build.sh --verbose",
+    "build:create-files": "./build.sh --create-files",
     "dev": "bun run --watch capture-runner.ts",
     "dev:test": "bun run --watch capture-runner.ts --test",
-    "clean": "./build.sh --clean",
-    "setup": "bun install && chmod +x build.sh && ./build.sh",
-    "postinstall": "chmod +x build.sh"
+    "clean": "./build.sh --clean && rm -f capture_process_*.log",
+    "clean:logs": "rm -f capture_process_*.log",
+    "clean:test-files": "rm -rf ~/Documents/CaptureTests",
+    "setup": "bun install && chmod +x build.sh && ./build.sh --create-files && ./build.sh",
+    "setup:quick": "chmod +x build.sh && ./build.sh",
+    "postinstall": "chmod +x build.sh",
+    "logs": "ls -la capture_process_*.log",
+    "logs:latest": "tail -f $(ls -t capture_process_*.log | head -1)",
+    "logs:view": "cat $(ls -t capture_process_*.log | head -1)",
+    "test:permissions": "bun run capture-runner.ts --check-permissions",
+    "info": "bun run capture-runner.ts --info",
+    "lint": "bunx @biomejs/biome check .",
+    "format": "bunx @biomejs/biome format --write ."
   },
   "devDependencies": {
     "@types/bun": "latest",
-    "@types/node": "^20.0.0"
+    "@types/node": "^20.0.0",
+    "@biomejs/biome": "^1.8.0"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"
+  },
+  "requirements": {
+    "macOS": "12.3+",
+    "permissions": [
+      "Microphone",
+      "Screen Recording"
+    ],
+    "frameworks": [
+      "AVFoundation",
+      "ScreenCaptureKit",
+      "CoreGraphics",
+      "CoreMedia",
+      "Foundation",
+      "CoreAudio"
+    ]
+  },
+  "files": [
+    "capture-runner.ts",
+    "CaptureProcess.swift",
+    "build.sh",
+    "README.md",
+    "CaptureProcess.entitlements",
+    "Info.plist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/swift-capture-bun"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/swift-capture-bun/issues"
   }
 }
